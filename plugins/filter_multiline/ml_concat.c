@@ -149,6 +149,40 @@ int ml_get_partial_id(msgpack_object *map,
     return 0;
 }
 
+int ml_get_partial_ordinal(msgpack_object *map)
+{
+    msgpack_object_kv *kv;
+    msgpack_object val;
+    int ordinal = -1;
+    
+    kv = ml_get_key(map, "partial_ordinal");
+    
+    if (kv == NULL) {
+        return -1;
+    }
+    
+    val = kv->val;
+    
+    /* Handle both string and numeric ordinals */
+    if (val.type == MSGPACK_OBJECT_POSITIVE_INTEGER) {
+        ordinal = (int)val.via.u64;
+    }
+    else if (val.type == MSGPACK_OBJECT_STR || val.type == MSGPACK_OBJECT_BIN) {
+        char *str = (val.type == MSGPACK_OBJECT_STR) ? 
+                    (char *)val.via.str.ptr : (char *)val.via.bin.ptr;
+        size_t len = (val.type == MSGPACK_OBJECT_STR) ? 
+                     val.via.str.size : val.via.bin.size;
+        char temp[32];
+        if (len < sizeof(temp)) {
+            memcpy(temp, str, len);
+            temp[len] = '\0';
+            ordinal = atoi(temp);
+        }
+    }
+    
+    return ordinal;
+}
+
 struct split_message_packer *ml_get_packer(struct mk_list *packers, const char *tag, 
                                            char *input_name, 
                                            char *partial_id_str, size_t partial_id_size)

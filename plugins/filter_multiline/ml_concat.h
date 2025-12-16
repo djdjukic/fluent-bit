@@ -41,6 +41,15 @@
 #define FLB_MULTILINE_PARTIAL_ID_KEY       "partial_id"
 #define FLB_MULTILINE_PARTIAL_LAST_KEY     "partial_last"
 
+/* Structure to hold buffered partial messages for sorting */
+struct ml_partial_message {
+    msgpack_object *map;
+    int ordinal;
+    struct flb_time timestamp;
+    
+    struct mk_list _head;
+};
+
 struct split_message_packer {
     flb_sds_t tag;
     flb_sds_t input_name;
@@ -56,6 +65,10 @@ struct split_message_packer {
     /* used to flush buffers that have been pending for more than flush_ms */
     unsigned long long last_write_time;
 
+    /* List of buffered partial messages (struct ml_partial_message) */
+    struct mk_list partial_messages;
+    int expected_parts;  /* Total number of expected parts (-1 if unknown) */
+
     struct mk_list _head;
 };
 
@@ -65,6 +78,7 @@ int ml_is_partial_last(msgpack_object *map);
 int ml_get_partial_id(msgpack_object *map, 
                       char **partial_id_str,
                       size_t *partial_id_size);
+int ml_get_partial_ordinal(msgpack_object *map);
 struct split_message_packer *ml_get_packer(struct mk_list *packers, const char *tag, 
                                            char *input_name, 
                                            char *partial_id_str, size_t partial_id_size);
