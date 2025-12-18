@@ -660,18 +660,31 @@ static void ml_free_msgpack_map(msgpack_object *map)
 static int ml_buffer_partial_message(struct split_message_packer *packer,
                                      msgpack_object *map,
                                      struct flb_time *tm,
-                                     int ordinal)
+                                     int ordinal,
+                                     struct ml_ctx *ctx)
 {
     struct ml_partial_message *partial;
     
+    /* Check if we've hit the limit */
+    if (packer->partial_message_count >= FLB_MULTILINE_MAX_PARTIAL_MESSAGES) {
+        flb_plg_warn(ctx->ins, 
+                     "Partial message buffer limit reached (%d), dropping new partial for partial_id=%s ordinal=%d",
+                     FLB_MULTILINE_MAX_PARTIAL_MESSAGES,
+                     packer->partial_id,
+                     ordinal);
+        return -1;
+    }
+    
     partial = flb_malloc(sizeof(struct ml_partial_message));
     if (!partial) {
+        flb_plg_error(ctx->ins, "Failed to allocate memory for partial message");
         return -1;
     }
     
     /* Make a copy of the map since the original might be freed */
     partial->map = ml_copy_msgpack_map(map);
     if (!partial->map) {
+        flb_plg_error(ctx->ins, "Failed to copy msgpack map for partial message");
         flb_free(partial);
         return -1;
     }
@@ -680,29 +693,39 @@ static int ml_buffer_partial_message(struct split_message_packer *packer,
     partial->timestamp = *tm;
     
     mk_list_add(&partial->_head, &packer->partial_messages);
+    packer->partial_message_count++;
     
     return 0;
 }
 
 /* Sort and concatenate buffered partial messages */
 static int ml_flush_sorted_partials(struct split_message_packer *packer,
-                                    char *multiline_key_content)
+                                    char *multiline_key_content,
+                                    struct ml_ctx *ctx)
 {
     struct mk_list *head, *tmp;
-    struct ml_partial_message *partial, *sorted_partials[1000]; /* Max 1000 parts */
+    struct ml_partial_message *partial, **sorted_partials;
     int count = 0;
     int i, j, ret;
-    int max_ordinal = -1;
+    
+    count = packer->partial_message_count;
+    
+    if (count == 0) {
+        return 0;
+    }
+    
+    /* Allocate array for exactly the number of messages we have */
+    sorted_partials = flb_malloc(count * sizeof(struct ml_partial_message *));
+    if (!sorted_partials) {
+        flb_plg_error(ctx->ins, "Failed to allocate memory for sorting %d partial messages", count);
+        return -1;
+    }
     
     /* Collect all buffered messages */
+    i = 0;
     mk_list_foreach_safe(head, tmp, &packer->partial_messages) {
         partial = mk_list_entry(head, struct ml_partial_message, _head);
-        if (count < 1000) {
-            sorted_partials[count++] = partial;
-            if (partial->ordinal > max_ordinal) {
-                max_ordinal = partial->ordinal;
-            }
-        }
+        sorted_partials[i++] = partial;
         mk_list_del(&partial->_head);
     }
     
@@ -734,9 +757,14 @@ static int ml_flush_sorted_partials(struct split_message_packer *packer,
                 ml_free_msgpack_map(sorted_partials[j]->map);
                 flb_free(sorted_partials[j]);
             }
+            flb_free(sorted_partials);
+            packer->partial_message_count = 0;
             return -1;
         }
     }
+    
+    flb_free(sorted_partials);
+    packer->partial_message_count = 0;
     
     return 0;
 }
@@ -857,11 +885,10 @@ static int ml_filter_partial(const void *data, size_t bytes,
 
             /* Buffer this partial message if we have an ordinal */
             if (ordinal >= 0) {
-                ret = ml_buffer_partial_message(packer, log_event.body, &log_event.timestamp, ordinal);
+                ret = ml_buffer_partial_message(packer, log_event.body, &log_event.timestamp, ordinal, ctx);
                 if (ret != 0) {
                     flb_plg_warn(ctx->ins, "Could not buffer partial message for tag %s", tag);
-                    flb_log_event_decoder_destroy(&log_decoder);
-                    return FLB_FILTER_NOTOUCH;
+                    /* Continue processing - the message was dropped but we can continue */
                 }
             } else {
                 /* No ordinal - fall back to immediate concatenation */
@@ -879,7 +906,7 @@ static int ml_filter_partial(const void *data, size_t bytes,
                 /* Check if we have buffered messages to sort */
                 if (!mk_list_is_empty(&packer->partial_messages)) {
                     /* Sort and flush all buffered messages */
-                    ret = ml_flush_sorted_partials(packer, ctx->key_content);
+                    ret = ml_flush_sorted_partials(packer, ctx->key_content, ctx);
                     if (ret != 0) {
                         flb_plg_error(ctx->ins, "could not flush sorted partials");
                         flb_log_event_decoder_destroy(&log_decoder);

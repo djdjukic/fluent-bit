@@ -29,6 +29,8 @@
 #define FLB_MULTILINE_METRIC_EMITTED         200
 /* docker logs are split at 16KB */
 #define FLB_MULTILINE_PARTIAL_BUF_SIZE       24000
+/* Maximum number of partial messages to buffer before dropping */
+#define FLB_MULTILINE_MAX_PARTIAL_MESSAGES   128
 
 /* 
  * Long term these keys could be made user configurable
@@ -67,6 +69,7 @@ struct split_message_packer {
 
     /* List of buffered partial messages (struct ml_partial_message) */
     struct mk_list partial_messages;
+    int partial_message_count;  /* Current number of buffered partial messages */
     int expected_parts;  /* Total number of expected parts (-1 if unknown) */
 
     struct mk_list _head;

@@ -364,6 +364,9 @@ struct split_message_packer *ml_create_packer(const char *tag, char *input_name,
         return NULL;
     }
 
+    /* Initialize partial message tracking */
+    packer->partial_message_count = 0;
+
     return packer;
 }
 
