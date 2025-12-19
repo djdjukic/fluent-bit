@@ -614,44 +614,160 @@ static void partial_timer_cb(struct flb_config *config, void *data)
     }
 }
 
-/* Helper function to create a copy of a msgpack_object map */
+/* Helper function to deep copy a msgpack_object */
+static int ml_deep_copy_msgpack_object(msgpack_object *dest, msgpack_object *src)
+{
+    int i;
+    msgpack_object_kv *kv_src, *kv_dest;
+    char *str_copy;
+    
+    dest->type = src->type;
+    
+    switch (src->type) {
+    case MSGPACK_OBJECT_NIL:
+    case MSGPACK_OBJECT_BOOLEAN:
+    case MSGPACK_OBJECT_POSITIVE_INTEGER:
+    case MSGPACK_OBJECT_NEGATIVE_INTEGER:
+    case MSGPACK_OBJECT_FLOAT32:
+    case MSGPACK_OBJECT_FLOAT64:
+        /* Simple types - just copy the value */
+        *dest = *src;
+        return 0;
+        
+    case MSGPACK_OBJECT_STR:
+        /* Deep copy string */
+        str_copy = flb_malloc(src->via.str.size);
+        if (!str_copy) {
+            return -1;
+        }
+        memcpy(str_copy, src->via.str.ptr, src->via.str.size);
+        dest->via.str.ptr = str_copy;
+        dest->via.str.size = src->via.str.size;
+        return 0;
+        
+    case MSGPACK_OBJECT_BIN:
+        /* Deep copy binary */
+        str_copy = flb_malloc(src->via.bin.size);
+        if (!str_copy) {
+            return -1;
+        }
+        memcpy(str_copy, src->via.bin.ptr, src->via.bin.size);
+        dest->via.bin.ptr = str_copy;
+        dest->via.bin.size = src->via.bin.size;
+        return 0;
+        
+    case MSGPACK_OBJECT_MAP:
+        /* Deep copy map */
+        dest->via.map.size = src->via.map.size;
+        dest->via.map.ptr = flb_calloc(src->via.map.size, sizeof(msgpack_object_kv));
+        if (!dest->via.map.ptr) {
+            return -1;
+        }
+        
+        kv_src = src->via.map.ptr;
+        kv_dest = dest->via.map.ptr;
+        
+        for (i = 0; i < src->via.map.size; i++) {
+            if (ml_deep_copy_msgpack_object(&kv_dest[i].key, &kv_src[i].key) != 0) {
+                return -1;
+            }
+            if (ml_deep_copy_msgpack_object(&kv_dest[i].val, &kv_src[i].val) != 0) {
+                return -1;
+            }
+        }
+        return 0;
+        
+    case MSGPACK_OBJECT_ARRAY:
+        /* Deep copy array */
+        dest->via.array.size = src->via.array.size;
+        dest->via.array.ptr = flb_calloc(src->via.array.size, sizeof(msgpack_object));
+        if (!dest->via.array.ptr) {
+            return -1;
+        }
+        
+        for (i = 0; i < src->via.array.size; i++) {
+            if (ml_deep_copy_msgpack_object(&dest->via.array.ptr[i], &src->via.array.ptr[i]) != 0) {
+                return -1;
+            }
+        }
+        return 0;
+        
+    default:
+        return -1;
+    }
+}
+
+/* Helper function to create a deep copy of a msgpack_object map */
 static msgpack_object *ml_copy_msgpack_map(msgpack_object *original)
 {
     msgpack_object *copy;
-    msgpack_object_kv *kv_orig, *kv_copy;
-    int i;
     
     copy = flb_malloc(sizeof(msgpack_object));
     if (!copy) {
         return NULL;
     }
     
-    copy->type = MSGPACK_OBJECT_MAP;
-    copy->via.map.size = original->via.map.size;
-    copy->via.map.ptr = flb_calloc(original->via.map.size, sizeof(msgpack_object_kv));
-    
-    if (!copy->via.map.ptr) {
+    if (ml_deep_copy_msgpack_object(copy, original) != 0) {
         flb_free(copy);
         return NULL;
-    }
-    
-    kv_orig = original->via.map.ptr;
-    kv_copy = copy->via.map.ptr;
-    
-    for (i = 0; i < original->via.map.size; i++) {
-        kv_copy[i].key = kv_orig[i].key;
-        kv_copy[i].val = kv_orig[i].val;
     }
     
     return copy;
 }
 
+/* Helper function to recursively free deep-copied msgpack objects */
+static void ml_free_msgpack_object(msgpack_object *obj)
+{
+    int i;
+    msgpack_object_kv *kv;
+    
+    if (!obj) {
+        return;
+    }
+    
+    switch (obj->type) {
+    case MSGPACK_OBJECT_STR:
+        if (obj->via.str.ptr) {
+            flb_free((void *)obj->via.str.ptr);
+        }
+        break;
+        
+    case MSGPACK_OBJECT_BIN:
+        if (obj->via.bin.ptr) {
+            flb_free((void *)obj->via.bin.ptr);
+        }
+        break;
+        
+    case MSGPACK_OBJECT_MAP:
+        if (obj->via.map.ptr) {
+            kv = obj->via.map.ptr;
+            for (i = 0; i < obj->via.map.size; i++) {
+                ml_free_msgpack_object(&kv[i].key);
+                ml_free_msgpack_object(&kv[i].val);
+            }
+            flb_free(obj->via.map.ptr);
+        }
+        break;
+        
+    case MSGPACK_OBJECT_ARRAY:
+        if (obj->via.array.ptr) {
+            for (i = 0; i < obj->via.array.size; i++) {
+                ml_free_msgpack_object(&obj->via.array.ptr[i]);
+            }
+            flb_free(obj->via.array.ptr);
+        }
+        break;
+        
+    default:
+        /* Other types don't have allocated memory */
+        break;
+    }
+}
+
 static void ml_free_msgpack_map(msgpack_object *map)
 {
     if (map) {
-        if (map->via.map.ptr) {
-            flb_free(map->via.map.ptr);
-        }
+        ml_free_msgpack_object(map);
         flb_free(map);
     }
 }
