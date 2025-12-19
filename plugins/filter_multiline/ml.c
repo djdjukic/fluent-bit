@@ -998,8 +998,9 @@ static int ml_filter_partial(const void *data, size_t bytes,
                     goto pack_non_partial;
                 }
 
-                /* Initialize the partial messages list */
+                /* Initialize the partial messages list and counter */
                 mk_list_init(&packer->partial_messages);
+                packer->partial_message_count = 0;
                 packer->expected_parts = -1;
 
                 mk_list_add(&packer->_head, &ctx->split_message_packers);
@@ -1028,9 +1029,10 @@ static int ml_filter_partial(const void *data, size_t bytes,
 
             is_last_partial = ml_is_partial_last(log_event.body);
             if (is_last_partial == FLB_TRUE) {
-                flb_plg_info(ctx->ins, "Last partial detected, buffered count=%d", packer->partial_message_count);
-                /* Check if we have buffered messages to sort */
-                if (!mk_list_is_empty(&packer->partial_messages)) {
+                flb_plg_info(ctx->ins, "Last partial detected, buffered count=%d, list_empty=%d", 
+                             packer->partial_message_count, mk_list_is_empty(&packer->partial_messages));
+                /* Check if we have buffered messages to sort - use count instead of list check */
+                if (packer->partial_message_count > 0) {
                     flb_plg_info(ctx->ins, "Flushing %d buffered messages", packer->partial_message_count);
                     /* Sort and flush all buffered messages */
                     ret = ml_flush_sorted_partials(packer, ctx->key_content, ctx);
@@ -1039,6 +1041,8 @@ static int ml_filter_partial(const void *data, size_t bytes,
                         flb_log_event_decoder_destroy(&log_decoder);
                         return FLB_FILTER_NOTOUCH;
                     }
+                } else {
+                    flb_plg_warn(ctx->ins, "Last partial but count is zero!");
                 }
 
                 /* emit the record in this filter invocation */

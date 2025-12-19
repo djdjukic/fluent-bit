@@ -387,7 +387,7 @@ int ml_split_message_packer_write(struct split_message_packer *packer,
     kv = ml_get_key(map, multiline_key_content);
 
     if (kv == NULL) {
-        flb_error("[partial message concat] Could not find key %s in record", multiline_key_content);
+        flb_error("[partial message concat] Could not find key '%s' in record", multiline_key_content);
         return -1;
     }
 
@@ -399,9 +399,13 @@ int ml_split_message_packer_write(struct split_message_packer *packer,
         val_str  = (char *) val.via.str.ptr;
         val_str_size = val.via.str.size;
     } else {
+        flb_error("[partial message concat] Key '%s' found but value type is %d (not string/binary)", 
+                  multiline_key_content, val.type);
         return -1;
     }
 
+    flb_info("[partial message concat] Appending %zu bytes to buffer (current size: %zu)", 
+             val_str_size, flb_sds_len(packer->buf));
     flb_sds_cat_safe(&packer->buf, val_str, val_str_size);
     packer->last_write_time = ml_current_timestamp();
 
