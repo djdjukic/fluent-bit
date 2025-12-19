@@ -860,6 +860,8 @@ static int ml_flush_sorted_partials(struct split_message_packer *packer,
     for (i = 0; i < count; i++) {
         partial = sorted_partials[i];
         
+        flb_plg_info(ctx->ins, "Processing buffered message %d/%d, ordinal=%d", i+1, count, partial->ordinal);
+        
         /* Append the log content */
         ret = ml_split_message_packer_write(packer, partial->map, multiline_key_content);
         
@@ -868,6 +870,7 @@ static int ml_flush_sorted_partials(struct split_message_packer *packer,
         flb_free(partial);
         
         if (ret != 0) {
+            flb_plg_error(ctx->ins, "Failed to write partial message ordinal=%d", partial->ordinal);
             /* Clean up remaining partials on error */
             for (j = i + 1; j < count; j++) {
                 ml_free_msgpack_map(sorted_partials[j]->map);
@@ -876,6 +879,9 @@ static int ml_flush_sorted_partials(struct split_message_packer *packer,
             flb_free(sorted_partials);
             packer->partial_message_count = 0;
             return -1;
+        } else {
+            flb_plg_info(ctx->ins, "Successfully wrote ordinal=%d, total buf size now=%zu", 
+                         partial->ordinal, flb_sds_len(packer->buf));
         }
     }
     
@@ -1001,6 +1007,8 @@ static int ml_filter_partial(const void *data, size_t bytes,
 
             /* Buffer this partial message if we have an ordinal */
             if (ordinal >= 0) {
+                flb_plg_info(ctx->ins, "Buffering partial message: ordinal=%d, partial_id=%.*s", 
+                             ordinal, (int)partial_id_size, partial_id_str);
                 ret = ml_buffer_partial_message(packer, log_event.body, &log_event.timestamp, ordinal, ctx);
                 if (ret != 0) {
                     flb_plg_warn(ctx->ins, "Could not buffer partial message for tag %s", tag);
@@ -1008,6 +1016,7 @@ static int ml_filter_partial(const void *data, size_t bytes,
                 }
             } else {
                 /* No ordinal - fall back to immediate concatenation */
+                flb_plg_info(ctx->ins, "No ordinal found, writing immediately");
                 ret = ml_split_message_packer_write(packer, log_event.body, ctx->key_content);
                 if (ret < 0) {
                     flb_plg_warn(ctx->ins, "Could not append content for partial record with tag %s", tag);
@@ -1019,8 +1028,10 @@ static int ml_filter_partial(const void *data, size_t bytes,
 
             is_last_partial = ml_is_partial_last(log_event.body);
             if (is_last_partial == FLB_TRUE) {
+                flb_plg_info(ctx->ins, "Last partial detected, buffered count=%d", packer->partial_message_count);
                 /* Check if we have buffered messages to sort */
                 if (!mk_list_is_empty(&packer->partial_messages)) {
+                    flb_plg_info(ctx->ins, "Flushing %d buffered messages", packer->partial_message_count);
                     /* Sort and flush all buffered messages */
                     ret = ml_flush_sorted_partials(packer, ctx->key_content, ctx);
                     if (ret != 0) {
@@ -1032,6 +1043,7 @@ static int ml_filter_partial(const void *data, size_t bytes,
 
                 /* emit the record in this filter invocation */
                 return_records++;
+                flb_plg_info(ctx->ins, "Completing packer, buf size=%zu bytes", flb_sds_len(packer->buf));
                 ml_split_message_packer_complete(packer);
                 ml_append_complete_record(packer, &log_encoder);
                 mk_list_del(&packer->_head);
